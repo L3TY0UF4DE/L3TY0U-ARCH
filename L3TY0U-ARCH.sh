@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # Intended for the official Arch ISO or an installed Arch system.
 
 SCRIPT_NAME="$(basename "$0")"
-LOG_FILE="${LOG_FILE:-./arch-custom-install.log}"
+LOG_FILE="${LOG_FILE:-./L3TY0U-ARCH.log}"
 PACMAN_FLAGS=("--needed" "--noconfirm")
 TARGET_MOUNT="${TARGET_MOUNT:-/mnt}"
 TARGET_DISK=""
@@ -24,6 +24,16 @@ INSTALL_GPU_DRIVERS=1
 ROOT_PASSWORD=""
 USER_PASSWORD=""
 FORMAT_DISK=1
+
+show_banner() {
+  cat <<'BANNER'
+============================================================
+ L3TY0U-ARCH
+ Custom Arch Linux Installer
+ Designed by Thomas Wiebe aka L3TY0UF4DE
+============================================================
+BANNER
+}
 
 DESKTOP_ENVIRONMENTS=(
   "none|No desktop environment|"
@@ -193,6 +203,29 @@ run_in_target_as_user() {
   fi
 }
 
+install_live_prerequisites() {
+  local packages=(archlinux-keyring gptfdisk dosfstools e2fsprogs parted arch-install-scripts)
+
+  case "$FILESYSTEM" in
+    btrfs) packages+=(btrfs-progs) ;;
+    xfs) packages+=(xfsprogs) ;;
+  esac
+
+  run pacman -Sy --needed --noconfirm "${packages[@]}"
+}
+
+allow_temporary_aur_sudo() {
+  [[ -n "$TARGET_USER" ]] || return 0
+  run_in_target bash -lc "printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' '$TARGET_USER' > /etc/sudoers.d/99-l3ty0u-aur"
+  run_in_target chmod 440 /etc/sudoers.d/99-l3ty0u-aur
+}
+
+remove_temporary_aur_sudo() {
+  if (( FORMAT_DISK == 1 )); then
+    run_in_target rm -f /etc/sudoers.d/99-l3ty0u-aur
+  fi
+}
+
 partition_path() {
   local disk="$1"
   local number="$2"
@@ -339,6 +372,63 @@ prompt_password() {
   done
 }
 
+valid_username() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+}
+
+valid_hostname() {
+  [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]
+}
+
+prompt_username() {
+  local username
+  while true; do
+    username="$(prompt_text "Main username" "${TARGET_USER:-archuser}")"
+    username="${username,,}"
+    if valid_username "$username"; then
+      printf '%s\n' "$username"
+      return 0
+    fi
+    printf 'Use a lowercase Linux username, like "thomas" or "archuser".\n' >&2
+  done
+}
+
+prompt_hostname() {
+  local name
+  while true; do
+    name="$(prompt_text "Hostname" "$HOSTNAME")"
+    if valid_hostname "$name"; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+    printf 'Use a simple hostname, like "archbox" or "laptop-arch".\n' >&2
+  done
+}
+
+prompt_timezone() {
+  local timezone
+  while true; do
+    timezone="$(prompt_text "Timezone" "$TIMEZONE")"
+    if [[ -f "/usr/share/zoneinfo/$timezone" ]]; then
+      printf '%s\n' "$timezone"
+      return 0
+    fi
+    printf 'Timezone not found. Example: America/Toronto or Europe/London.\n' >&2
+  done
+}
+
+prompt_keymap() {
+  local keymap
+  while true; do
+    keymap="$(prompt_text "Keyboard layout" "$KEYMAP")"
+    if ! command -v localectl >/dev/null 2>&1 || localectl list-keymaps 2>/dev/null | grep -Fxq "$keymap"; then
+      printf '%s\n' "$keymap"
+      return 0
+    fi
+    printf 'Keyboard layout not found. Example: us, ca, uk, de, fr.\n' >&2
+  done
+}
+
 choose_filesystem() {
   local entry
   entry="$(prompt_single "Root filesystem" \
@@ -394,17 +484,34 @@ collect_disk_choices() {
 }
 
 confirm_disk_wipe() {
-  local typed
+  local typed expected attempts=0
+  expected="ERASE $TARGET_DISK"
+
   printf '\nWARNING: %s will be completely erased.\n' "$TARGET_DISK" >&2
   lsblk "$TARGET_DISK" >&2 || true
-  printf '\nType exactly ERASE %s to continue.\n' "$TARGET_DISK" >&2
-  read -r -p "> " typed
-  [[ "$typed" == "ERASE $TARGET_DISK" ]] || die "Disk wipe confirmation failed."
+
+  printf '\nType this exact phrase to continue:\n\n  %s\n\n' "$expected" >&2
+
+  while (( attempts < 3 )); do
+    read -r -p "> " typed
+    typed="${typed//$'\r'/}"
+    typed="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' <<<"$typed")"
+
+    if [[ "$typed" == "$expected" ]]; then
+      return 0
+    fi
+
+    attempts=$((attempts + 1))
+    printf 'That did not match. Expected: %s\n' "$expected" >&2
+  done
+
+  die "Disk wipe confirmation failed."
 }
 
 format_and_mount_disk() {
   local part_num=1
   confirm_disk_wipe
+  install_live_prerequisites
 
   EFI_PARTITION="$(partition_path "$TARGET_DISK" "$part_num")"
   part_num=$((part_num + 1))
@@ -473,12 +580,15 @@ format_and_mount_disk() {
 }
 
 collect_base_system_choices() {
-  HOSTNAME="$(prompt_text "Hostname" "$HOSTNAME")"
-  TIMEZONE="$(prompt_text "Timezone" "$TIMEZONE")"
-  KEYMAP="$(prompt_text "Keyboard layout" "$KEYMAP")"
+  HOSTNAME="$(prompt_hostname)"
+  TIMEZONE="$(prompt_timezone)"
+  KEYMAP="$(prompt_keymap)"
 
   if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
-    TARGET_USER="$(prompt_text "Main username" "archuser")"
+    TARGET_USER="$(prompt_username)"
+  elif ! valid_username "$TARGET_USER"; then
+    printf 'The username "%s" is not valid for Linux user creation.\n' "$TARGET_USER" >&2
+    TARGET_USER="$(prompt_username)"
   fi
 
   if confirm "Enable multilib for Steam, Wine, and 32-bit packages?" "y"; then
@@ -616,9 +726,11 @@ aur_install() {
   fi
 
   install_aur_helper "$CHOSEN_AUR_HELPER"
+  (( FORMAT_DISK == 1 )) && allow_temporary_aur_sudo
   # shellcheck disable=SC2086
   if (( FORMAT_DISK == 1 )); then
     run_in_target_as_user "$TARGET_USER" "$CHOSEN_AUR_HELPER" -S "${PACMAN_FLAGS[@]}" $packages
+    remove_temporary_aur_sudo
   else
     as_user "$TARGET_USER" "$CHOSEN_AUR_HELPER" -S "${PACMAN_FLAGS[@]}" $packages
   fi
@@ -642,6 +754,7 @@ install_aur_helper() {
 
   if (( FORMAT_DISK == 1 )); then
     run_in_target pacman -S "${PACMAN_FLAGS[@]}" base-devel git sudo
+    allow_temporary_aur_sudo
     run_in_target_as_user "$TARGET_USER" bash -lc "rm -rf /tmp/$helper && git clone https://aur.archlinux.org/$helper.git /tmp/$helper && cd /tmp/$helper && makepkg -si --noconfirm"
   else
     run pacman -S "${PACMAN_FLAGS[@]}" base-devel git
@@ -747,6 +860,12 @@ collect_choices() {
     SELECTED_GROUP_KEYS+=("$(entry_key "$entry")")
     split_packages "$(entry_packages "$entry")"
   done < <(prompt_multi "Optional package groups" "${OPTIONAL_GROUPS[@]}")
+
+  if ((${#SELECTED_AUR_PACKAGES[@]} > 0)) && [[ "$CHOSEN_AUR_HELPER" == "none" ]]; then
+    printf '\nAUR packages were selected, so an AUR helper is required.\n' >&2
+    entry="$(prompt_single "Choose an AUR helper" "yay|yay|yay" "paru|paru|paru")"
+    CHOSEN_AUR_HELPER="$(entry_key "$entry")"
+  fi
 }
 
 show_summary() {
@@ -824,7 +943,7 @@ preflight() {
 
   if (( FORMAT_DISK == 1 )); then
     [[ -d /sys/firmware/efi/efivars ]] || die "This installer currently supports UEFI installs only. Boot the Arch ISO in UEFI mode."
-    for command_name in lsblk sgdisk wipefs mkfs.fat partprobe pacstrap genfstab arch-chroot; do
+    for command_name in lsblk pacman wipefs; do
       command -v "$command_name" >/dev/null 2>&1 || die "Missing required command: $command_name"
     done
   fi
@@ -842,6 +961,7 @@ preflight() {
 main() {
   parse_args "$@"
   : > "$LOG_FILE"
+  show_banner | tee -a "$LOG_FILE"
   preflight
 
   log "Starting $SCRIPT_NAME"
