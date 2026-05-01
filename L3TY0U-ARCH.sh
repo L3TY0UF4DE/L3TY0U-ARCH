@@ -31,6 +31,7 @@ show_banner() {
  L3TY0U-ARCH
  Custom Arch Linux Installer
  Designed by Thomas Wiebe aka L3TY0UF4DE
+ Inspired By ChrisTitusTech (archtitus/linutil)
 ============================================================
 BANNER
 }
