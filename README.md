@@ -51,14 +51,13 @@ Boot the official Arch ISO in a virtual machine using UEFI mode.
 Clone or copy this project into the live environment, then run:
 
 ```bash
-chmod +x arch-custom-install.sh
-sudo ./arch-custom-install.sh --dry-run
+sudo ./L3TY0U-ARCH.sh --dry-run
 ```
 
 If the dry run looks right, test on a disposable virtual disk:
 
 ```bash
-sudo ./arch-custom-install.sh
+sudo ./L3TY0U-ARCH.sh
 ```
 
 The script will show a summary before doing anything destructive. Before formatting, it will also require you to type:
@@ -72,12 +71,12 @@ ERASE /dev/yourdisk
 To use the script only for package/app setup on an already installed Arch system:
 
 ```bash
-sudo ./arch-custom-install.sh --no-format --user yourusername
+sudo ./L3TY0U-ARCH.sh --no-format --user yourusername
 ```
 
 ## Customizing Packages
 
-Most choices live near the top of `arch-custom-install.sh` in editable arrays:
+Most choices live near the top of `L3TY0U-ARCH.sh` in editable arrays:
 
 - `DESKTOP_ENVIRONMENTS`
 - `DISPLAY_MANAGERS`
